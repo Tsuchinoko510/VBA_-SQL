@@ -1,0 +1,292 @@
+Option Explicit
+
+'**************************************************************
+' 機能: DBをオープンする
+' 引数: データベース、ID、パスワード、タイムアウト値
+' 返り値: オブジェクト
+'**************************************************************
+Public Function FuncDBOpen(ByVal strDataBase As String, _
+                            ByVal strUID As String, _
+                            ByVal strPWD As String, _
+                            ByVal dblTimeOutSec As Double) As Object
+    
+    'エラー処理
+    On Error GoTo errorHandler
+   
+    Dim strConnect As String
+    strConnect = "PROVIDER=IBMDADB2" & _
+                     ";UID=" & strUID & _
+                     ";DSN=" & strDataBase & _
+                     ";PWD=" & strPWD
+
+    'オブジェクト作成
+    Dim ObjConnect As Object
+    Set ObjConnect = CreateObject("ADODB.Connection")
+
+    'タイムアウト値を設定する（秒）
+    ObjConnect.CommandTimeout = dblTimeOutSec
+    
+    ObjConnect.Open strConnect
+    
+    Set FuncDBOpen = ObjConnect
+    
+    Exit Function
+
+errorHandler:
+        Dim strCode As String
+        strCode = Trim(Mid(Err.Description, 1, 10))
+        If strCode = "SQL1031N" Then
+            MsgBox "環境が誤っています。", vbCritical + vbOKOnly, "環境誤り"
+        ElseIf strCode = "SQL30082N" Then
+            MsgBox "ユーザーIDまたはパスワードが誤っています。", vbCritical + vbOKOnly, "ユーザーIDまたはパスワードエラー"
+        Else
+            MsgBox "DB接続で環境、ユーザーＩＤ、パスワード以外のエラーが出ています。この後のエラーメッセージを参照してください。", vbCritical + vbOKOnly, "その他エラー"
+            MsgBox Err.Description, vbCritical, "エラーメッセージ"
+        End If
+        End
+        
+End Function
+
+'-----------------------------------------------------------
+' 機能: SQLをチェックする。
+' 引数: SQLテキスト
+' 返り値: Boolean
+'-----------------------------------------------------------
+Public Function FuncCheckSQL(ByVal StrSQL As String) As Boolean
+    FuncCheckSQL = True
+    StrSQL = UCase(StrSQL) '小文字を大文字に変換
+    StrSQL = Application.WorksheetFunction.Trim(StrSQL) '前後、複数の空白をトリム
+    'SELECTチェック
+    If InStr(1, StrSQL, "SELECT", vbBinaryCompare) <> 1 Then
+        MsgBox "SQLがSELECTから始まっていません。", vbCritical + vbOKOnly, "SQL文エラー"
+        FuncCheckSQL = False
+        Exit Function
+    End If
+    
+    'FROMチェック
+    If InStr(1, StrSQL, "FROM", vbBinaryCompare) = 0 Then
+        MsgBox "SQLにFROM句がありません。", vbCritical + vbOKOnly, "SQL文エラー"
+        FuncCheckSQL = False
+        Exit Function
+    End If
+    
+    'WHEREチェック
+    If InStr(1, StrSQL, "WHERE", vbBinaryCompare) = 0 Then
+        MsgBox "SQLにWHERE句がありません。", vbCritical + vbOKOnly, "SQL文エラー"
+        FuncCheckSQL = False
+        Exit Function
+    End If
+    
+    'WITH URチェック
+    If InStr(1, StrSQL, "WITH UR", vbBinaryCompare) = 0 Then
+        MsgBox "SQLの最後にWITH UR句がありません。", vbCritical + vbOKOnly, "SQL文エラー"
+        FuncCheckSQL = False
+        Exit Function
+    End If
+    
+End Function
+
+'-----------------------------------------------------------
+' 機能: SQLの結果件数を確認する
+' 引数: 実行SQL（select countのみ）
+' 返り値: レコード数
+'-----------------------------------------------------------
+Public Function FuncExecSQLCount(ByVal ObjConnect As Object, ByVal StrSQL As String) As Double
+
+    'カウントSQLの作成
+    Dim dblSQLFrom As Integer 'FROMの位置を取得
+    dblSQLFrom = InStr(1, StrSQL, "FROM", vbBinaryCompare)
+    Dim strSQLCount As String 'FROMの前にCountを入れる
+    strSQLCount = "SELECT count(*) " & Mid(StrSQL, dblSQLFrom, Len(StrSQL))
+    
+    '結果件数の取得
+    Dim objRes As Object
+    Set objRes = CreateObject("ADODB.Recordset")
+    Set objRes = ObjConnect.Execute(strSQLCount) 'SQLの実行
+    Dim dblRecCnt As Double
+    FuncExecSQLCount = objRes.Fields(0) '件数の設定
+       
+    '結果セットクローズ
+    objRes.Close
+    Set objRes = Nothing
+
+End Function
+
+'-----------------------------------------------------------
+' 機能: SQLを実行してテキストファイルを出力する
+' 引数: オブジェクト、SQL、ヘッダ有無、出力ファイルタイプ、結果ファイル名、結果ファイルへの時間付与有無
+' 返り値: 結果ファイルのフルパス
+'-----------------------------------------------------------
+Public Function FuncExecSQL(ByVal ObjConnect As Object, _
+                                      ByVal StrSQL As String, _
+                                      ByVal StrHeaderUmu As String, _
+                                      ByVal StrOutType As String, _
+                                      ByVal StrOutFileName As String, _
+                                      ByVal strOutTimeUmu As String) As String
+    
+    FuncExecSQL = ""
+    'エラー処理（Ver1.15）
+    On Error GoTo errorHandler
+    
+    'SQLの実行
+    Dim objRes As Object
+    Set objRes = CreateObject("ADODB.Recordset")
+    Set objRes = ObjConnect.Execute(StrSQL) 'SQLの実行
+        
+    '結果ファイル名（フルパス）の設定
+    Dim strFilePath As String
+    strFilePath = FuncOutFileName(StrOutType, StrOutFileName, strOutTimeUmu)
+    
+    Dim objOutFile As Object
+    Set objOutFile = CreateObject("ADODB.Stream")
+    With objOutFile
+    '結果ファイルの作成
+    If StrOutType = "Excel" Then
+        Dim wbOut As Workbook '出力ワークブックの作成
+        Set wbOut = Workbooks.Add
+    Else
+        .Charset = "Shift-JIS"
+        .Open
+    End If
+    
+    'デリミタの設定
+    Dim strDelimiter As String
+    strDelimiter = vbTab 'デフォルトのタブを設定
+    If StrOutType = "Csv" Then strDelimiter = "," 'Csvの時だけコンマを入れる
+    
+    'レコードがなくなるまで書き込み
+    Dim strOutLine As String
+    Dim dblRecordCnt As Double
+    dblRecordCnt = 0
+    Dim dblDBKoumokuCnt As Double
+    Dim vOutTextArray As Variant 'テキスト書き込み用配列
+    Dim vOutExcelArray() As String
+    Dim i As Double
+    Dim dblWriteRow As Double
+    dblWriteRow = 0
+    Do Until objRes.EOF
+        strOutLine = ""  '書き込み行の初期化
+        dblRecordCnt = dblRecordCnt + 1 '結果レコード数のカウントアップ
+        '1レコード目の場合
+        If dblRecordCnt = 1 Then
+            dblDBKoumokuCnt = objRes.Fields.Count '結果項目数の設定
+            '結果出力配列取得
+            ReDim vOutTextArray(dblDBKoumokuCnt) As Variant
+            'ヘッダ（項目名）の設定（ヘッダ有無が有の場合のみ）
+            If StrHeaderUmu = "有" Then
+                For i = 0 To dblDBKoumokuCnt - 1
+                    vOutTextArray(i) = objRes.Fields(i).Name
+                    strOutLine = strOutLine & Trim(vOutTextArray(i))
+                    If i <> dblDBKoumokuCnt - 1 Then
+                        strOutLine = strOutLine & strDelimiter
+                    End If
+                Next i
+                '項目名の書き込み
+                If StrOutType = "Excel" Then
+                    dblWriteRow = dblWriteRow + 1
+                    vOutExcelArray = Split(strOutLine, strDelimiter) '分割
+                    For i = LBound(vOutExcelArray) To UBound(vOutExcelArray)
+                        wbOut.Sheets(1).Cells(dblWriteRow, i + 1) = vOutExcelArray(i)
+                    Next i
+                Else
+                    .WriteText strOutLine, 1 'テキストへの書き込み
+                End If
+                strOutLine = "" '書き込み行の初期化
+            End If
+        End If
+            
+        '項目数分、SQL結果取得
+        For i = 1 To dblDBKoumokuCnt
+            vOutTextArray(i - 1) = objRes.Fields(i - 1)
+            strOutLine = strOutLine & Trim(vOutTextArray(i - 1))
+            If i <> dblDBKoumokuCnt Then
+                strOutLine = strOutLine & strDelimiter
+            End If
+        Next
+        'レコードの書き込み
+        If StrOutType = "Excel" Then
+            dblWriteRow = dblWriteRow + 1
+            vOutExcelArray = Split(strOutLine, strDelimiter) '分割
+            For i = LBound(vOutExcelArray) To UBound(vOutExcelArray)
+                wbOut.Sheets(1).Cells(dblWriteRow, i + 1).NumberFormatLocal = "@"
+                wbOut.Sheets(1).Cells(dblWriteRow, i + 1) = vOutExcelArray(i)
+            Next i
+        Else
+            .WriteText strOutLine, 1 'テキストへの書き込み
+        End If
+                               
+        objRes.MoveNext '次の結果へ
+    Loop
+    If StrOutType = "Excel" Then
+        wbOut.Sheets(1).Activate
+        wbOut.Sheets(1).Range(wbOut.Sheets(1).Columns(1), wbOut.Sheets(1).Columns(UBound(vOutExcelArray) + 1)).AutoFit
+        wbOut.SaveAs strFilePath
+    Else
+        .SaveToFile strFilePath, 2
+        .Close
+    End If
+    
+    End With
+    '結果セットクローズ
+    objRes.Close
+    Set objRes = Nothing
+    
+    'エラーハンドリングと合わせて追加（Ver1.15）
+    Exit Function
+
+'エラー処理を追加（Ver1.15）
+errorHandler:
+        Dim strCode As String
+        Dim strTimeout As String
+        strCode = Trim(Mid(Err.Description, 13, 10))
+        If strCode = "SQL0952N" Then
+            strTimeout = ThisWorkbook.Sheets("接続情報").Range("B6")
+            MsgBox "タイムアウトが発生しました。" & "タイムアウト設定値：" & strTimeout & "秒" & vbCrLf & "接続情報シートのタイムアウト値（秒）で変更可能です。", vbCritical + vbOKOnly, "SQL実行タイムアウト"
+        Else
+            MsgBox "SQL実行でタイムアウト以外のエラーが出ています。この後のエラーメッセージを参照してください。", vbCritical + vbOKOnly, "SQL実行その他エラー"
+            MsgBox Err.Description, vbCritical, "エラーメッセージ"
+        End If
+        End '終了する。
+
+End Function
+
+'-----------------------------------------------------------
+' 機能: 結果ファイル名を作る
+' 引数:出力ファイルタイプ、結果ファイル名、結果ファイルへの時間付与有無
+' 返り値: 出力ファイル名（フルパス）
+'-----------------------------------------------------------
+Public Function FuncOutFileName(ByVal StrOutType As String, _
+                                      ByVal StrOutFileName As String, _
+                                      ByVal strOutTimeUmu As String) As String
+    FuncOutFileName = ""
+    '結果ファイル名に時間を付与
+    If strOutTimeUmu = "有" Then
+        Dim strNowTime As String
+        strNowTime = Format(Now, "yyyymmddHHMMSS")
+        StrOutFileName = StrOutFileName & "_" & strNowTime
+    End If
+    'ファイルの拡張子を設定
+    Select Case StrOutType
+        Case "Excel"
+            StrOutFileName = StrOutFileName & ".xlsx"
+        Case "Csv"
+            StrOutFileName = StrOutFileName & ".csv"
+        Case "Tab"
+            StrOutFileName = StrOutFileName & ".tab"
+        Case Else
+            MsgBox "出力ファイルタイプ誤り=" & StrOutType
+    End Select
+    FuncOutFileName = ThisWorkbook.Path & "\" & StrOutFileName
+
+End Function
+
+'-----------------------------------------------------------
+' 機能: DBをクローズする
+' 引数: オブジェクト
+' 返り値: Boolean
+'-----------------------------------------------------------
+Public Function FuncDBClose(ByVal ObjConnect As Object) As Boolean
+    FuncDBClose = False
+    ObjConnect.Close
+    FuncDBClose = True
+End Function
