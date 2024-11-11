@@ -1,0 +1,248 @@
+Option Explicit
+
+Public ObjConnect As Object
+Public DblSQLNo As Double
+Public StrSQL As String
+Public StrTikanValue As String
+Public StrTikanKey As String
+Public StrTikanSetumei As String
+Public Const SQL_START_ROW = 4
+Public Enum SQL_COL
+    SQL_NO_COL = 1
+    SQL_SYURUI_COL
+    SQL_SQL_COL
+    SQL_HEADER_UMU_COL
+    SQL_OUTTYPE_COL
+    SQL_OUTFILE_NAME_COL
+    SQL_OUTFILE_TIME_UMU_COL
+End Enum
+
+Public StrHeaderUmu As String
+Public StrOutType As String
+Public StrOutFileName As String
+Public StrOutFileTimeUmu As String
+
+'**************************************************************
+' 機能: 接続情報シートを表示
+' 引数: なし
+' 返り値: なし
+'**************************************************************
+Sub subSetuzokuInfo()
+    ThisWorkbook.Sheets("接続情報").Activate
+    ThisWorkbook.Sheets("接続情報").Range("C4").Select
+End Sub
+
+'**************************************************************
+' 機能: mainシートを表示
+' 引数: なし
+' 返り値: なし
+'**************************************************************
+Sub subMainReturn()
+    ThisWorkbook.Sheets("main").Activate
+    ThisWorkbook.Sheets("main").Range("D8").Select
+End Sub
+
+'**************************************************************
+' 機能: main
+' 引数: なし
+' 返り値: なし
+'**************************************************************
+Sub main()
+
+    'SQLフォルダ、ファイル存在チェック
+    Call subSqlExistCheck
+
+    '画面チェック
+    Call subCheckMain
+
+    'SQLファイル作成
+    Call subSqlmake
+    
+    'DB接続
+    Call subDBOpen
+    
+    Dim wsMain As Worksheet '自分のワークシート
+    Set wsMain = ThisWorkbook.Sheets("main")
+    
+    If FuncCheckSQL(StrSQL) = True Then
+        Dim dblRecCnt As Double
+        dblRecCnt = FuncExecSQLCount(ObjConnect, StrSQL)
+        If dblRecCnt > 0 Then
+            Dim strMsg As String
+            strMsg = "ヒットしたレコード数は" & dblRecCnt & "件です。" & vbCrLf & "レコードを取得しますか？"
+            Dim intRtn As Integer
+            intRtn = MsgBox(strMsg, vbYesNo + vbQuestion, "レコード取得確認")
+            If intRtn = vbYes Then
+                Dim strFilePath As String
+                strFilePath = FuncExecSQL(ObjConnect, StrSQL, StrHeaderUmu, StrOutType, StrOutFileName, StrOutFileTimeUmu)
+            Else
+                MsgBox "レコードを取得せずに終了します。"
+            End If
+        Else
+            MsgBox "対象0件なので終了します。"
+        End If
+    Else
+        MsgBox "SQLエラー"
+    End If
+        
+    If FuncDBClose(ObjConnect) = False Then
+        MsgBox "DBクローズエラー"
+    End If
+        
+    MsgBox "処理完了"
+        
+End Sub
+
+'**************************************************************
+' 機能: SQLフォルダ、ファイルの存在確認をする
+' 引数: なし
+' 返り値: なし
+'**************************************************************
+Sub subSqlExistCheck()
+    'SQLフォルダの存在確認
+    Dim strFolderPath As String
+    Dim strFolderName As String
+    strFolderPath = ThisWorkbook.Path & "\SQL"
+    strFolderName = Dir(strFolderPath, vbDirectory)
+    If (strFolderName <> "SQL") Then
+        MsgBox "SQLフォルダがありません。処理を終了します。"
+        End
+    End If
+
+    'SQLファイル確認
+    Dim wsSQL As Worksheet
+    Set wsSQL = ThisWorkbook.Sheets("SQL")
+    Dim strFilePath As String
+    Dim strFileName As String
+    Dim strSQLFileName As String
+    With wsSQL
+        Dim i As Double
+        i = 4
+        Do Until .Cells(i, 3) = ""
+            strSQLFileName = .Cells(i, 3)
+            strFilePath = ThisWorkbook.Path & "\SQL\" & strSQLFileName
+            strFileName = Dir(strFilePath)
+            If (strFileName <> strSQLFileName) Then
+                Dim strMsg As String
+                strMsg = strSQLFileName & vbCrLf & "がSQLフォルダに存在しません。"
+                strMsg = strMsg & vbCrLf & "処理を終了します。"
+                MsgBox strMsg
+                End
+            End If
+            i = i + 1
+        Loop
+    End With
+
+End Sub
+
+
+'**************************************************************
+' 機能: mainシートをチェックする
+' 引数: なし
+' 返り値: なし
+'**************************************************************
+Sub subCheckMain()
+    Dim wsMain As Worksheet
+    Set wsMain = ThisWorkbook.Sheets("main")
+    
+    With wsMain
+        DblSQLNo = .Range("A8").Value 'SQLNo
+        StrTikanKey = .Range("B8").Value
+        StrTikanSetumei = .Range("C8")
+        StrTikanValue = .Range("D8").Value '置換
+
+        Dim rngTikanValue, rngErrMsg As Range
+        Set rngTikanValue = .Range("D8")
+        Set rngErrMsg = .Range("E8")
+        
+        rngTikanValue.Activate
+        Dim strErrMsg As String
+        '未入力チェック
+        If StrTikanValue = "" Then
+            strErrMsg = StrTikanSetumei & "を入力してください。"
+        End If
+        
+        If strErrMsg = "" Then
+            rngErrMsg = ""
+        Else
+            rngErrMsg = strErrMsg
+            .Columns("E").AutoFit
+            MsgBox strErrMsg
+            End
+        End If
+    
+    End With
+
+End Sub
+
+'**************************************************************
+' 機能: SQLファイルを作る
+' 引数: なし
+' 返り値: なし
+'**************************************************************
+Sub subSqlmake()
+
+    Dim wsMain As Worksheet
+    Set wsMain = ThisWorkbook.Sheets("main")
+    'SQLNoの取得
+    Dim DblSQLNo As Double
+    DblSQLNo = wsMain.Range("A8")
+    
+    'SQLファイルの取得
+    Dim wsSQL As Worksheet
+    Set wsSQL = ThisWorkbook.Sheets("SQL")
+    Dim i As Double
+    i = SQL_START_ROW
+    With wsSQL
+    Do Until .Cells(i, SQL_NO_COL) = ""
+        If .Cells(i, SQL_NO_COL) = DblSQLNo Then
+            'ファイルをstrSQLに書き込む
+            Dim strFileFullPath As String
+            strFileFullPath = ThisWorkbook.Path & "\SQL\" & .Cells(i, SQL_SQL_COL)
+            Dim objInFile As Object
+            Set objInFile = CreateObject("ADODB.Stream")
+            objInFile.Charset = "Shift-JIS"
+            objInFile.Open
+            objInFile.LoadFromFile strFileFullPath
+            StrSQL = objInFile.ReadText
+            objInFile.Close
+            StrHeaderUmu = .Cells(i, SQL_HEADER_UMU_COL) 'ヘッダー有無
+            StrOutType = .Cells(i, SQL_OUTTYPE_COL) '出力ファイルタイプ
+            StrOutFileName = .Cells(i, SQL_OUTFILE_NAME_COL) '出力ファイル名
+            StrOutFileTimeUmu = .Cells(i, SQL_OUTFILE_TIME_UMU_COL) '出力ファイル名のタイムススタンプ有無
+        End If
+        i = i + 1
+    Loop
+    
+    'SQLファイルの置換
+    StrSQL = Replace(StrSQL, StrTikanKey, StrTikanValue)
+    
+    End With
+End Sub
+
+
+'**************************************************************
+' 機能: DBをオープンする
+' 引数: なし
+' 返り値: なし
+'**************************************************************
+Sub subDBOpen()
+    Dim strDataBase As String 'データベース接続子
+    Dim strUID As String 'ユーザーID
+    Dim strPWD As String 'パスワード
+    Dim dblTimeOutSec As Double '接続タイムアウト値
+    
+    Dim wsSetuzoku As Worksheet
+    Set wsSetuzoku = ThisWorkbook.Sheets("接続情報")
+
+    With wsSetuzoku
+        strDataBase = .Range("C3") 'データベース接続子
+        strUID = .Range("C4") 'ユーザーID
+        strPWD = .Range("C5") 'パスワード
+        dblTimeOutSec = .Range("C6") '接続タイムアウト値
+    End With
+        
+    'DBオープン
+    Set ObjConnect = FuncDBOpen(strDataBase, strUID, strPWD, dblTimeOutSec)
+
+End Sub
